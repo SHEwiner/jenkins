@@ -34,6 +34,7 @@ import com.google.common.collect.Lists;
 import com.google.inject.Inject;
 import com.google.inject.Injector;
 import com.thoughtworks.xstream.XStream;
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import hudson.*;
 import hudson.Launcher.LocalLauncher;
 import jenkins.AgentProtocol;
@@ -242,6 +243,7 @@ import org.kohsuke.stapler.framework.adjunct.AdjunctManager;
 import org.kohsuke.stapler.interceptor.RequirePOST;
 import org.kohsuke.stapler.jelly.JellyClassLoaderTearOff;
 import org.kohsuke.stapler.jelly.JellyRequestDispatcher;
+import org.kohsuke.stapler.verb.POST;
 import org.xml.sax.InputSource;
 
 import javax.annotation.CheckForNull;
@@ -313,6 +315,9 @@ public class Jenkins extends AbstractCIBase implements DirectlyModifiableTopLeve
         ModifiableViewGroup, AccessControlled, DescriptorByNameOwner,
         ModelObjectWithContextMenu, ModelObjectWithChildren, OnMaster {
     private transient final Queue queue;
+
+    // flag indicating if we have loaded the jenkins configuration or not yet.
+    private transient volatile boolean configLoaded = false;
 
     /**
      * Stores various objects scoped to {@link Jenkins}.
@@ -848,9 +853,10 @@ public class Jenkins extends AbstractCIBase implements DirectlyModifiableTopLeve
      * @param pluginManager
      *      If non-null, use existing plugin manager.  create a new one.
      */
-    @edu.umd.cs.findbugs.annotations.SuppressFBWarnings({
+    @SuppressFBWarnings({
         "SC_START_IN_CTOR", // bug in FindBugs. It flags UDPBroadcastThread.start() call but that's for another class
-        "ST_WRITE_TO_STATIC_FROM_INSTANCE_METHOD" // Trigger.timer
+        "ST_WRITE_TO_STATIC_FROM_INSTANCE_METHOD", // Trigger.timer
+        "DM_EXIT" // Exit is wanted here
     })
     protected Jenkins(File root, ServletContext context, PluginManager pluginManager) throws IOException, InterruptedException, ReactorException {
         oldJenkinsJVM = JenkinsJVM.isJenkinsJVM(); // capture to restore in cleanUp()
@@ -2090,6 +2096,7 @@ public class Jenkins extends AbstractCIBase implements DirectlyModifiableTopLeve
      * Returns all {@link Node}s in the system, excluding {@link Jenkins} instance itself which
      * represents the master.
      */
+    @Nonnull
     public List<Node> getNodes() {
         return nodes.getNodes();
     }
@@ -3077,14 +3084,13 @@ public class Jenkins extends AbstractCIBase implements DirectlyModifiableTopLeve
             // load from disk
             cfg.unmarshal(Jenkins.this);
         }
-
+        configLoaded = true;
         try {
             checkRawBuildsDir(buildsDir);
             setBuildsAndWorkspacesDir();
         } catch (InvalidBuildsDir invalidBuildsDir) {
             throw new IOException(invalidBuildsDir);
         }
-
     }
 
     private void setBuildsAndWorkspacesDir() throws IOException, InvalidBuildsDir {
@@ -3285,13 +3291,31 @@ public class Jenkins extends AbstractCIBase implements DirectlyModifiableTopLeve
      * Save the settings to a file.
      */
     public synchronized void save() throws IOException {
-        if(BulkChange.contains(this))   return;
+        InitMilestone currentMilestone = initLevel;
 
-        if (initLevel == InitMilestone.COMPLETED) {
+        if (!configLoaded) {
+            // someone is trying to save the config before all extensions are loaded (and possibly after as the task
+            // may run in parallel with other tasks.  OMG...!!! this is generally very bad and can lead to dataloss
+            LOGGER.log(Level.SEVERE,
+                       "An attempt to save Jenkins'' global configuration before it has been loaded has been "
+                       + "made during milestone " + currentMilestone
+                       + ".  This is indicative of a bug in the caller and may lead to full or partial loss of "
+                       + "configuration.",
+                       new IllegalStateException("call trace"));
+            // at this point we may want to terminate but the save may be called from a different thread and we
+            // can not call System.halt() because we could be running in a container :(
+            // for now just deny the save (the data will be replaced when we do load anyway
+            throw new IllegalStateException("An attempt to save the global configuration was made before it was loaded");
+        }
+
+        if(BulkChange.contains(this)) {
+            return;
+        }
+        if (currentMilestone == InitMilestone.COMPLETED) {
             LOGGER.log(FINE, "setting version {0} to {1}", new Object[] {version, VERSION});
             version = VERSION;
         } else {
-            LOGGER.log(FINE, "refusing to set version {0} to {1} during {2}", new Object[] {version, VERSION, initLevel});
+            LOGGER.log(FINE, "refusing to set version {0} to {1} during {2}", new Object[] {version, VERSION, currentMilestone});
         }
 
         getConfigFile().write(this);
@@ -3753,7 +3777,7 @@ public class Jenkins extends AbstractCIBase implements DirectlyModifiableTopLeve
     /**
      * Accepts submission from the configuration page.
      */
-    @RequirePOST
+    @POST
     public synchronized void doConfigSubmit( StaplerRequest req, StaplerResponse rsp ) throws IOException, ServletException, FormException {
         BulkChange bc = new BulkChange(this);
         try {
@@ -3807,7 +3831,7 @@ public class Jenkins extends AbstractCIBase implements DirectlyModifiableTopLeve
     /**
      * Accepts submission from the node configuration page.
      */
-    @RequirePOST
+    @POST
     public synchronized void doConfigExecutorsSubmit( StaplerRequest req, StaplerResponse rsp ) throws IOException, ServletException, FormException {
         checkPermission(ADMINISTER);
 
@@ -3836,10 +3860,10 @@ public class Jenkins extends AbstractCIBase implements DirectlyModifiableTopLeve
     }
 
     @RequirePOST
-    public synchronized HttpRedirect doQuietDown() throws IOException {
+    public synchronized HttpRedirect doQuietDown() {
         try {
             return doQuietDown(false,0);
-        } catch (InterruptedException e) {
+        } catch (IOException | InterruptedException e) {
             throw new AssertionError(); // impossible
         }
     }
@@ -3958,7 +3982,7 @@ public class Jenkins extends AbstractCIBase implements DirectlyModifiableTopLeve
         return (T)copy((TopLevelItem)src,name);
     }
 
-    @RequirePOST
+    @POST
     public synchronized void doCreateView( StaplerRequest req, StaplerResponse rsp ) throws IOException, ServletException, FormException {
         checkPermission(View.CREATE);
         addView(View.create(req,rsp, this));
@@ -4373,6 +4397,7 @@ public class Jenkins extends AbstractCIBase implements DirectlyModifiableTopLeve
 
         new Thread("exit thread") {
             @Override
+            @SuppressFBWarnings(value = "DM_EXIT", justification = "Exit is really intended.")
             public void run() {
                 try {
                     ACL.impersonate(ACL.SYSTEM);
@@ -4401,6 +4426,7 @@ public class Jenkins extends AbstractCIBase implements DirectlyModifiableTopLeve
         final String exitAddr = req!=null ? req.getRemoteAddr() : "unknown";
         new Thread("safe-exit thread") {
             @Override
+            @SuppressFBWarnings(value = "DM_EXIT", justification = "Exit is really intended.")
             public void run() {
                 try {
                     ACL.impersonate(ACL.SYSTEM);
@@ -4937,7 +4963,7 @@ public class Jenkins extends AbstractCIBase implements DirectlyModifiableTopLeve
         }
 
         @Override
-        @RequirePOST
+        @POST
         public void doConfigSubmit(StaplerRequest req, StaplerResponse rsp) throws IOException, ServletException, FormException {
             Jenkins.get().doConfigExecutorsSubmit(req, rsp);
         }
