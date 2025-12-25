@@ -24,46 +24,49 @@
 
 package hudson.util;
 
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.not;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
+
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.lang.reflect.Field;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
-
-import static org.hamcrest.CoreMatchers.*;
-import org.junit.After;
-import static org.junit.Assert.*;
-import static org.junit.Assume.*;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 /**
  * In its own suite to minimize the chance of mucking about with other tests.
  */
-public class XStream2EncodingTest {
+class XStream2EncodingTest {
 
-    @Before public void useNonUTF8() {
+    private static void useNonUTF8() {
         clearDefaultEncoding();
         System.setProperty("file.encoding", "ISO-8859-1");
-        assumeThat(Charset.defaultCharset().name(), is("ISO-8859-1"));
+        assumeTrue(Charset.defaultCharset().name().equals("ISO-8859-1"));
     }
 
-    @After public void clearDefaultEncodingAfter() {
+    private static void clearDefaultEncodingAfter() {
         clearDefaultEncoding();
     }
 
-    private void clearDefaultEncoding() {
+    private static void clearDefaultEncoding() {
         try {
             Field defaultCharset = Charset.class.getDeclaredField("defaultCharset");
             defaultCharset.setAccessible(true);
             defaultCharset.set(null, null);
         } catch (Exception x) {
-            assumeNoException(x);
+            // Per JDK-4163515, this is not supported. It happened to work prior to Java 17, though.
+            assumeTrue(false, x.toString());
         }
     }
 
     @SuppressWarnings("deprecation")
-    @Test public void toXMLUnspecifiedEncoding() throws Exception {
+    @Test
+    void toXMLUnspecifiedEncoding() throws Exception {
+      useNonUTF8();
+      try {
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         XStream2 xs = new XStream2();
         String msg = "k chybě";
@@ -76,9 +79,15 @@ public class XStream2EncodingTest {
         baos2.write(ambiguousXml);
         t = (Thing) xs.fromXML(new ByteArrayInputStream(ambiguousXml));
         assertThat(t.field, not(msg));
+      } finally {
+        clearDefaultEncodingAfter();
+      }
     }
 
-    @Test public void toXMLUTF8() throws Exception {
+    @Test
+    void toXMLUTF8() throws Exception {
+      useNonUTF8();
+      try {
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         XStream2 xs = new XStream2();
         String msg = "k chybě";
@@ -86,10 +95,14 @@ public class XStream2EncodingTest {
         byte[] unspecifiedData = baos.toByteArray();
         Thing t = (Thing) xs.fromXML(new ByteArrayInputStream(unspecifiedData));
         assertThat(t.field, is(msg));
+      } finally {
+        clearDefaultEncodingAfter();
+      }
     }
 
     public static class Thing {
         public final String field;
+
         Thing(String field) {
             this.field = field;
         }

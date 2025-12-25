@@ -1,25 +1,17 @@
 package jenkins.util;
 
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
+import hudson.Util;
 import hudson.util.FormValidation;
-
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.InvalidPathException;
-import jenkins.model.Jenkins;
-import net.sf.json.JSONObject;
-import org.apache.commons.codec.DecoderException;
-import org.apache.commons.codec.binary.Hex;
-import org.apache.commons.io.Charsets;
-import org.apache.commons.io.output.NullOutputStream;
-import org.apache.commons.io.output.TeeOutputStream;
-import org.jvnet.hudson.crypto.CertificateUtil;
-import org.jvnet.hudson.crypto.SignatureOutputStream;
-
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.io.OutputStreamWriter;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.security.DigestOutputStream;
 import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
@@ -40,6 +32,11 @@ import java.util.List;
 import java.util.Set;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import jenkins.model.Jenkins;
+import net.sf.json.JSONObject;
+import org.apache.commons.io.output.TeeOutputStream;
+import org.jvnet.hudson.crypto.CertificateUtil;
+import org.jvnet.hudson.crypto.SignatureOutputStream;
 
 /**
  * @author Kohsuke Kawaguchi
@@ -55,18 +52,19 @@ public class JSONSignatureValidator {
     /**
      * Verifies the signature in the update center data file.
      */
+    @SuppressFBWarnings(value = "WEAK_MESSAGE_DIGEST_SHA1", justification = "SHA-1 is only used as a fallback if SHA-512 is not available")
     public FormValidation verifySignature(JSONObject o) throws IOException {
         try {
             FormValidation warning = null;
 
             JSONObject signature = o.getJSONObject("signature");
             if (signature.isNullObject()) {
-                return FormValidation.error("No signature block found in "+name);
+                return FormValidation.error("No signature block found in " + name);
             }
             o.remove("signature");
 
             List<X509Certificate> certs = new ArrayList<>();
-            {// load and verify certificates
+            { // load and verify certificates
                 CertificateFactory cf = CertificateFactory.getInstance("X509");
                 for (Object cert : signature.getJSONArray("certificates")) {
                     try {
@@ -74,11 +72,13 @@ public class JSONSignatureValidator {
                         try {
                             c.checkValidity();
                         } catch (CertificateExpiredException e) { // even if the certificate isn't valid yet, we'll proceed it anyway
-                            warning = FormValidation.warning(e, String.format("Certificate %s has expired in %s", cert.toString(), name));
+                            warning = FormValidation.warning(e, String.format("Certificate %s has expired in %s", cert, name));
                         } catch (CertificateNotYetValidException e) {
-                            warning = FormValidation.warning(e, String.format("Certificate %s is not yet valid in %s", cert.toString(), name));
+                            warning = FormValidation.warning(e, String.format("Certificate %s is not yet valid in %s", cert, name));
                         }
-                        LOGGER.log(Level.FINE, "Add certificate found in json doc: \r\n\tsubjectDN: {0}\r\n\tissuer: {1}", new Object[]{c.getSubjectDN(), c.getIssuerDN()});
+                        LOGGER.log(Level.FINE, "Add certificate found in JSON document:\n\tsubjectDN: {0}\n\tissuer: {1}\n\tnotBefore: {2}\n\tnotAfter: {3}",
+                                new Object[] { c.getSubjectDN(), c.getIssuerDN(), c.getNotBefore(), c.getNotAfter() });
+                        LOGGER.log(Level.FINEST, () -> "Certificate from JSON document: " + c);
                         certs.add(c);
                     } catch (IllegalArgumentException ex) {
                         throw new IOException("Could not decode certificate", ex);
@@ -106,7 +106,9 @@ public class JSONSignatureValidator {
                         LOGGER.log(Level.INFO, "JSON data source '" + name + "' does not provide a SHA-512 content checksum or signature. Looking for SHA-1.");
                         break;
                     case OK:
-                        // fall through
+                        break;
+                    default:
+                        throw new AssertionError("Unknown form validation kind: " + resultSha512.kind);
                 }
             } catch (NoSuchAlgorithmException nsa) {
                 LOGGER.log(Level.WARNING, "Failed to verify potential SHA-512 digest/signature, falling back to SHA-1", nsa);
@@ -128,13 +130,15 @@ public class JSONSignatureValidator {
                         return FormValidation.error("No correct_signature or correct_signature512 entry found in '" + name + "'.");
                     }
                 case OK:
-                    // fall through
+                    break;
+                default:
+                    throw new AssertionError("Unknown form validation kind: " + resultSha1.kind);
             }
 
-            if (warning!=null)  return warning;
+            if (warning != null)  return warning;
             return FormValidation.ok();
         } catch (GeneralSecurityException e) {
-            return FormValidation.error(e, "Signature verification failed in "+name);
+            return FormValidation.error(e, "Signature verification failed in " + name);
         }
     }
 
@@ -154,7 +158,8 @@ public class JSONSignatureValidator {
      */
     private FormValidation checkSpecificSignature(JSONObject json, JSONObject signatureJson, MessageDigest digest, String digestEntry, Signature signature, String signatureEntry, String digestName) throws IOException {
         // this is for computing a digest to check sanity
-        DigestOutputStream dos = new DigestOutputStream(new NullOutputStream(), digest);
+        OutputStream nos = OutputStream.nullOutputStream();
+        DigestOutputStream dos = new DigestOutputStream(nos, digest);
         SignatureOutputStream sos = new SignatureOutputStream(signature);
 
         String providedDigest = signatureJson.optString(digestEntry, null);
@@ -182,7 +187,7 @@ public class JSONSignatureValidator {
         //
         // Jenkins should ignore "digest"/"signature" pair. Accepting it creates a vulnerability that allows
         // the attacker to inject a fragment at the end of the json.
-        json.writeCanonical(new OutputStreamWriter(new TeeOutputStream(dos,sos), Charsets.UTF_8)).close();
+        json.writeCanonical(new OutputStreamWriter(new TeeOutputStream(dos, sos), StandardCharsets.UTF_8)).close();
 
         // did the digest match? this is not a part of the signature validation, but if we have a bug in the c14n
         // (which is more likely than someone tampering with update center), we can tell
@@ -197,7 +202,7 @@ public class JSONSignatureValidator {
         }
 
         if (!verifySignature(signature, providedSignature)) {
-            return FormValidation.error(digestName + " based signature in the update center doesn't match with the certificate in '"+name + "'");
+            return FormValidation.error(digestName + " based signature in the update center doesn't match with the certificate in '" + name + "'");
         }
 
         return FormValidation.ok();
@@ -215,10 +220,10 @@ public class JSONSignatureValidator {
         // This approach might look unnecessarily clever, but short of having redundant Signature instances,
         // there doesn't seem to be a better approach for this.
         try {
-            if (signature.verify(Hex.decodeHex(providedSignature.toCharArray()))) {
+            if (signature.verify(Util.fromHexString(providedSignature))) {
                 return true;
             }
-        } catch (SignatureException|DecoderException ignore) {
+        } catch (SignatureException | IllegalArgumentException ignore) {
             // ignore
         }
 
@@ -226,7 +231,7 @@ public class JSONSignatureValidator {
             if (signature.verify(Base64.getDecoder().decode(providedSignature))) {
                 return true;
             }
-        } catch (SignatureException|IllegalArgumentException ignore) {
+        } catch (SignatureException | IllegalArgumentException ignore) {
             // ignore
         }
         return false;
@@ -236,7 +241,7 @@ public class JSONSignatureValidator {
      * Utility method supporting both possible digest formats: Base64 and Hex
      */
     private boolean digestMatches(byte[] digest, String providedDigest) {
-        return providedDigest.equalsIgnoreCase(Hex.encodeHexString(digest)) || providedDigest.equalsIgnoreCase(new String(Base64.getEncoder().encode(digest)));
+        return providedDigest.equalsIgnoreCase(Util.toHexString(digest)) || providedDigest.equalsIgnoreCase(Base64.getEncoder().encodeToString(digest));
     }
 
 
@@ -245,14 +250,20 @@ public class JSONSignatureValidator {
         // which isn't useful at all
         Set<TrustAnchor> anchors = new HashSet<>(); // CertificateUtil.getDefaultRootCAs();
         Jenkins j = Jenkins.get();
-        for (String cert : j.servletContext.getResourcePaths("/WEB-INF/update-center-rootCAs")) {
+        for (String cert : j.getServletContext().getResourcePaths("/WEB-INF/update-center-rootCAs")) {
             if (cert.endsWith("/") || cert.endsWith(".txt"))  {
                 continue;       // skip directories also any text files that are meant to be documentation
             }
             Certificate certificate;
-            try (InputStream in = j.servletContext.getResourceAsStream(cert)) {
+            try (InputStream in = j.getServletContext().getResourceAsStream(cert)) {
                 if (in == null) continue; // our test for paths ending in / should prevent this from happening
                 certificate = cf.generateCertificate(in);
+                if (certificate instanceof X509Certificate) {
+                    X509Certificate c = (X509Certificate) certificate;
+                    LOGGER.log(Level.FINE, "Add CA certificate found in webapp resources:\n\tsubjectDN: {0}\n\tissuer: {1}\n\tnotBefore: {2}\n\tnotAfter: {3}",
+                            new Object[] { c.getSubjectDN(), c.getIssuerDN(), c.getNotBefore(), c.getNotAfter() });
+                }
+                LOGGER.log(Level.FINEST, () -> "CA certificate from webapp resource " + cert + ": " + certificate);
             } catch (CertificateException e) {
                 LOGGER.log(Level.WARNING, String.format("Webapp resources in /WEB-INF/update-center-rootCAs are "
                                 + "expected to be either certificates or .txt files documenting the "
@@ -263,8 +274,6 @@ public class JSONSignatureValidator {
             }
             try {
                 TrustAnchor certificateAuthority = new TrustAnchor((X509Certificate) certificate, null);
-                LOGGER.log(Level.FINE, "Add Certificate Authority {0}: {1}",
-                        new Object[]{cert, (certificateAuthority.getTrustedCert() == null ? null : certificateAuthority.getTrustedCert().getSubjectDN())});
                 anchors.add(certificateAuthority);
             } catch (IllegalArgumentException e) {
                 LOGGER.log(Level.WARNING,
@@ -274,7 +283,7 @@ public class JSONSignatureValidator {
             }
         }
         File[] cas = new File(j.root, "update-center-rootCAs").listFiles();
-        if (cas!=null) {
+        if (cas != null) {
             for (File cert : cas) {
                 if (cert.isDirectory() || cert.getName().endsWith(".txt"))  {
                     continue;       // skip directories also any text files that are meant to be documentation
@@ -282,6 +291,12 @@ public class JSONSignatureValidator {
                 Certificate certificate;
                 try (InputStream in = Files.newInputStream(cert.toPath())) {
                     certificate = cf.generateCertificate(in);
+                    if (certificate instanceof X509Certificate) {
+                        X509Certificate c = (X509Certificate) certificate;
+                        LOGGER.log(Level.FINE, "Add CA certificate found in Jenkins home:\n\tsubjectDN: {0}\n\tissuer: {1}\n\tnotBefore: {2}\n\tnotAfter: {3}",
+                                new Object[] { c.getSubjectDN(), c.getIssuerDN(), c.getNotBefore(), c.getNotAfter() });
+                    }
+                    LOGGER.log(Level.FINEST, () -> "CA certificate from Jenkins home " + cert + ": " + certificate);
                 } catch (InvalidPathException e) {
                     throw new IOException(e);
                 } catch (CertificateException e) {
@@ -294,8 +309,6 @@ public class JSONSignatureValidator {
                 }
                 try {
                     TrustAnchor certificateAuthority = new TrustAnchor((X509Certificate) certificate, null);
-                    LOGGER.log(Level.FINE, "Add Certificate Authority {0}: {1}",
-                            new Object[]{cert, (certificateAuthority.getTrustedCert() == null ? null : certificateAuthority.getTrustedCert().getSubjectDN())});
                     anchors.add(certificateAuthority);
                 } catch (IllegalArgumentException e) {
                     LOGGER.log(Level.WARNING,

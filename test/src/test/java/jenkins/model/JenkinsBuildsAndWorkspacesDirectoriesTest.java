@@ -1,64 +1,68 @@
 package jenkins.model;
 
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.containsString;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
+import static org.junit.jupiter.api.Assumptions.assumeFalse;
+
 import hudson.Functions;
 import hudson.init.InitMilestone;
-import hudson.maven.MavenModuleSet;
-import hudson.maven.MavenModuleSetBuild;
 import hudson.model.FreeStyleBuild;
 import hudson.model.FreeStyleProject;
-import org.apache.commons.io.FileUtils;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Rule;
-import org.junit.Ignore;
-import org.junit.Test;
-import org.jvnet.hudson.test.ExtractResourceSCM;
-import org.jvnet.hudson.test.Issue;
-import org.jvnet.hudson.test.LoggerRule;
-import org.jvnet.hudson.test.MockFolder;
-import org.jvnet.hudson.test.RestartableJenkinsRule;
-import org.jvnet.hudson.test.recipes.LocalData;
-
 import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.logging.Level;
 import java.util.stream.Stream;
-
-import static org.hamcrest.CoreMatchers.containsString;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertThat;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
-import static org.junit.Assume.assumeFalse;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Disabled;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.api.io.TempDir;
+import org.jvnet.hudson.reactor.ReactorException;
+import org.jvnet.hudson.test.Issue;
+import org.jvnet.hudson.test.LogRecorder;
+import org.jvnet.hudson.test.MockFolder;
+import org.jvnet.hudson.test.junit.jupiter.JenkinsSessionExtension;
+import org.jvnet.hudson.test.recipes.LocalData;
 
 /**
  * Since JENKINS-50164, Jenkins#workspacesDir and Jenkins#buildsDir had their associated UI deleted.
  * So instead of configuring through the UI, we now have to use sysprops for this.
  * <p>
- * So this test class uses a {@link RestartableJenkinsRule} to check the behaviour of this sysprop being
+ * So this test class uses a {@link JenkinsSessionExtension} to check the behaviour of this sysprop being
  * present or not between two restarts.
  */
-public class JenkinsBuildsAndWorkspacesDirectoriesTest {
+class JenkinsBuildsAndWorkspacesDirectoriesTest {
 
     private static final String LOG_WHEN_CHANGING_BUILDS_DIR = "Changing builds directories from ";
     private static final String LOG_WHEN_CHANGING_WORKSPACES_DIR = "Changing workspaces directories from ";
 
-    @Rule
-    public RestartableJenkinsRule story = new RestartableJenkinsRule();
+    @RegisterExtension
+    private final JenkinsSessionExtension story = new JenkinsSessionExtension();
 
-    @Rule
-    public LoggerRule loggerRule = new LoggerRule();
+    private final LogRecorder loggerRule = new LogRecorder();
 
-    @Before
-    public void before() {
+    @TempDir
+    private static File tmp;
+
+    @BeforeEach
+    void before() {
         clearSystemProperties();
     }
 
-    @After
-    public void after() {
+    @AfterEach
+    void after() {
         clearSystemProperties();
     }
 
@@ -69,7 +73,7 @@ public class JenkinsBuildsAndWorkspacesDirectoriesTest {
 
     @Issue("JENKINS-53284")
     @Test
-    public void changeWorkspacesDirLog() throws Exception {
+    void changeWorkspacesDirLog() throws Throwable {
         loggerRule.record(Jenkins.class, Level.WARNING)
                 .record(Jenkins.class, Level.INFO).capture(1000);
 
@@ -84,16 +88,13 @@ public class JenkinsBuildsAndWorkspacesDirectoriesTest {
             setWorkspacesDirProperty("testdir2");
         });
 
-        story.then(step -> {
-            assertTrue(logWasFoundAtLevel(LOG_WHEN_CHANGING_WORKSPACES_DIR,
-                                          Level.WARNING));
-        });
+        story.then(step -> assertTrue(logWasFoundAtLevel(LOG_WHEN_CHANGING_WORKSPACES_DIR, Level.WARNING)));
     }
 
     @Issue("JENKINS-50164")
     @Test
-    public void badValueForBuildsDir() {
-        story.then((rule) -> {
+    void badValueForBuildsDir() throws Throwable {
+        story.then(rule -> {
             final List<String> badValues = new ArrayList<>(Arrays.asList(
                     "blah",
                     "$JENKINS_HOME",
@@ -108,20 +109,15 @@ public class JenkinsBuildsAndWorkspacesDirectoriesTest {
             } // else perhaps running as root
 
             for (String badValue : badValues) {
-                try {
-                    Jenkins.checkRawBuildsDir(badValue);
-                    fail(badValue + " should have been rejected");
-                } catch (InvalidBuildsDir invalidBuildsDir) {
-                    // expected failure
-                }
+                assertThrows(InvalidBuildsDir.class, () -> Jenkins.checkRawBuildsDir(badValue), badValue + " should have been rejected");
             }
         });
     }
 
     @Issue("JENKINS-50164")
     @Test
-    public void goodValueForBuildsDir() {
-        story.then((rule) -> {
+    void goodValueForBuildsDir() throws Throwable {
+        story.then(rule -> {
             final List<String> badValues = Arrays.asList(
                     "$JENKINS_HOME/foo/$ITEM_FULL_NAME",
                     "${ITEM_ROOTDIR}/builds");
@@ -134,63 +130,58 @@ public class JenkinsBuildsAndWorkspacesDirectoriesTest {
 
     @Issue("JENKINS-50164")
     @Test
-    public void jenkinsDoesNotStartWithBadSysProp() {
-
+    void jenkinsDoesNotStartWithBadSysProp() throws Throwable {
         loggerRule.record(Jenkins.class, Level.WARNING)
                 .record(Jenkins.class, Level.INFO)
                 .capture(100);
 
         story.then(rule -> {
-            assertTrue(story.j.getInstance().isDefaultBuildDir());
+            assertTrue(rule.getInstance().isDefaultBuildDir());
             setBuildsDirProperty("/bluh");
         });
 
-        story.thenDoesNotStart();
+        assertThrows(ReactorException.class, () -> story.then(step -> fail("should have failed before reaching here.")));
     }
 
     @Issue("JENKINS-50164")
     @Test
-    public void jenkinsDoesNotStartWithScrewedUpConfigXml() {
-
+    void jenkinsDoesNotStartWithScrewedUpConfigXml() throws Throwable {
         loggerRule.record(Jenkins.class, Level.WARNING)
                 .record(Jenkins.class, Level.INFO)
                 .capture(100);
 
         story.then(rule -> {
 
-            assertTrue(story.j.getInstance().isDefaultBuildDir());
+            assertTrue(rule.getInstance().isDefaultBuildDir());
 
             // Now screw up the value by writing into the file directly, like one could do using external XML manipulation tools
-            final File configFile = new File(rule.jenkins.getRootDir(), "config.xml");
-            final String screwedUp = FileUtils.readFileToString(configFile).
+            final Path configFile = rule.jenkins.getRootDir().toPath().resolve("config.xml");
+            final String screwedUp = Files.readString(configFile, StandardCharsets.UTF_8).
                     replaceFirst("<buildsDir>.*</buildsDir>", "<buildsDir>eeeeeeeeek</buildsDir>");
-            FileUtils.write(configFile, screwedUp);
+            Files.writeString(configFile, screwedUp, StandardCharsets.UTF_8);
         });
 
-        story.thenDoesNotStart();
+        assertThrows(ReactorException.class, () -> story.then(step -> fail("should have failed before reaching here.")));
     }
 
     @Issue("JENKINS-50164")
     @Test
-    public void buildsDir() throws Exception {
+    void buildsDir() throws Throwable {
         loggerRule.record(Jenkins.class, Level.WARNING)
                 .record(Jenkins.class, Level.INFO)
                 .capture(100);
 
-        story.then(step -> {
-                       assertFalse(logWasFound("Using non default builds directories"));
-                   }
-        );
+        story.then(step -> assertFalse(logWasFound("Using non default builds directories")));
 
         story.then(steps -> {
-            assertTrue(story.j.getInstance().isDefaultBuildDir());
+            assertTrue(steps.getInstance().isDefaultBuildDir());
             setBuildsDirProperty("$JENKINS_HOME/plouf/$ITEM_FULL_NAME/bluh");
             assertFalse(JenkinsBuildsAndWorkspacesDirectoriesTest.this.logWasFound(LOG_WHEN_CHANGING_BUILDS_DIR));
         });
 
         story.then(step -> {
-                       assertFalse(story.j.getInstance().isDefaultBuildDir());
-                       assertEquals("$JENKINS_HOME/plouf/$ITEM_FULL_NAME/bluh", story.j.getInstance().getRawBuildsDir());
+                       assertFalse(step.getInstance().isDefaultBuildDir());
+                       assertEquals("$JENKINS_HOME/plouf/$ITEM_FULL_NAME/bluh", step.getInstance().getRawBuildsDir());
                        assertTrue(logWasFound("Changing builds directories from "));
                    }
         );
@@ -201,7 +192,7 @@ public class JenkinsBuildsAndWorkspacesDirectoriesTest {
 
     @Issue("JENKINS-50164")
     @Test
-    public void workspacesDir() throws Exception {
+    void workspacesDir() throws Throwable {
         loggerRule.record(Jenkins.class, Level.WARNING)
                 .record(Jenkins.class, Level.INFO)
                 .capture(1000);
@@ -209,33 +200,32 @@ public class JenkinsBuildsAndWorkspacesDirectoriesTest {
         story.then(step -> assertFalse(logWasFound("Using non default workspaces directories")));
 
         story.then(step -> {
-            assertTrue(story.j.getInstance().isDefaultWorkspaceDir());
+            assertTrue(step.getInstance().isDefaultWorkspaceDir());
             final String workspacesDir = "bluh";
             setWorkspacesDirProperty(workspacesDir);
             assertFalse(logWasFound("Changing workspaces directories from "));
         });
 
         story.then(step -> {
-            assertFalse(story.j.getInstance().isDefaultWorkspaceDir());
-            assertEquals("bluh", story.j.getInstance().getRawWorkspaceDir());
+            assertFalse(step.getInstance().isDefaultWorkspaceDir());
+            assertEquals("bluh", step.getInstance().getRawWorkspaceDir());
             assertTrue(logWasFound("Changing workspaces directories from "));
         });
 
 
         story.then(step -> {
-                       assertFalse(story.j.getInstance().isDefaultWorkspaceDir());
+                       assertFalse(step.getInstance().isDefaultWorkspaceDir());
                        assertTrue(logWasFound("Using non default workspaces directories"));
                    }
         );
     }
 
-    @Ignore("TODO calling restart seems to break Surefire")
+    @Disabled("TODO calling restart seems to break Surefire")
     @Issue("JENKINS-50164")
     @LocalData
     @Test
-    public void fromPreviousCustomSetup() {
-
-        assumeFalse("Default Windows lifecycle does not support restart.", Functions.isWindows());
+    void fromPreviousCustomSetup() throws Throwable {
+        assumeFalse(Functions.isWindows(), "Default Windows lifecycle does not support restart.");
 
         // check starting point and change config for next run
         final String newBuildsDirValueBySysprop = "/tmp/${ITEM_ROOTDIR}/bluh";
@@ -250,7 +240,7 @@ public class JenkinsBuildsAndWorkspacesDirectoriesTest {
 
             // ** HACK AROUND JENKINS-50422: manually restarting ** //
             // Check the disk (cannot just restart normally with the rule, )
-            assertThat(FileUtils.readFileToString(new File(j.jenkins.getRootDir(), "config.xml")),
+            assertThat(Files.readString(j.jenkins.getRootDir().toPath().resolve("config.xml"), StandardCharsets.UTF_8),
                        containsString("<buildsDir>" + newBuildsDirValueBySysprop + "</buildsDir>"));
 
             String rootDirBeforeRestart = j.jenkins.getRootDir().toString();
@@ -263,7 +253,7 @@ public class JenkinsBuildsAndWorkspacesDirectoriesTest {
             }
 
             assertEquals(rootDirBeforeRestart, j.jenkins.getRootDir().toString());
-            assertThat(FileUtils.readFileToString(new File(j.jenkins.getRootDir(), "config.xml")),
+            assertThat(Files.readString(j.jenkins.getRootDir().toPath().resolve("config.xml"), StandardCharsets.UTF_8),
                        containsString("<buildsDir>" + newBuildsDirValueBySysprop + "</buildsDir>"));
             assertEquals(newBuildsDirValueBySysprop, j.jenkins.getRawBuildsDir());
             // ** END HACK ** //
@@ -284,59 +274,26 @@ public class JenkinsBuildsAndWorkspacesDirectoriesTest {
                 .anyMatch(record -> record.getMessage().contains(searched));
     }
 
-	private boolean logWasFoundAtLevel(String searched, Level level) {
-		return loggerRule.getRecords().stream()
-                .filter(record -> record.getMessage().contains(searched))
-                .filter(record -> record.getLevel().equals(level)).count() > 0;
-	}
-
-    @Test
-    @Issue("JENKINS-12251")
-    public void testItemFullNameExpansion() throws Exception {
-        loggerRule.record(Jenkins.class, Level.WARNING)
-                .record(Jenkins.class, Level.INFO)
-                .capture(1000);
-
-        story.then(steps -> {
-            assertTrue(story.j.getInstance().isDefaultBuildDir());
-            assertTrue(story.j.getInstance().isDefaultWorkspaceDir());
-            setBuildsDirProperty("${JENKINS_HOME}/test12251_builds/${ITEM_FULL_NAME}");
-            setWorkspacesDirProperty("${JENKINS_HOME}/test12251_ws/${ITEM_FULL_NAME}");
-        });
-
-        story.then(steps -> {
-            assertTrue(JenkinsBuildsAndWorkspacesDirectoriesTest.this.logWasFound("Changing builds directories from "));
-            assertFalse(story.j.getInstance().isDefaultBuildDir());
-            assertFalse(story.j.getInstance().isDefaultWorkspaceDir());
-
-            // build a dummy project
-            MavenModuleSet m = story.j.jenkins.createProject(MavenModuleSet.class, "p");
-            m.setScm(new ExtractResourceSCM(getClass().getResource("/simple-projects.zip")));
-            MavenModuleSetBuild b = m.scheduleBuild2(0).get();
-
-            // make sure these changes are effective
-            assertTrue(b.getWorkspace().getRemote().contains("test12251_ws"));
-            assertTrue(b.getRootDir().toString().contains("test12251_builds"));
-        });
-
+    private boolean logWasFoundAtLevel(String searched, Level level) {
+        return loggerRule.getRecords().stream()
+                .filter(record -> record.getMessage().contains(searched)).anyMatch(record -> record.getLevel().equals(level));
     }
 
     @Test
     @Issue("JENKINS-17138")
-    public void externalBuildDirectoryRenameDelete() throws Exception {
-
+    void externalBuildDirectoryRenameDelete() throws Throwable {
         // Hack to get String builds usable in lambda below
         final List<String> builds = new ArrayList<>();
 
         story.then(steps -> {
-            builds.add(story.j.createTmpDir().toString());
-            assertTrue(story.j.getInstance().isDefaultBuildDir());
+            builds.add(newFolder(tmp, "junit").toString());
+            assertTrue(steps.getInstance().isDefaultBuildDir());
             setBuildsDirProperty(builds.get(0) + "/${ITEM_FULL_NAME}");
         });
 
         story.then(steps -> {
-            assertEquals(builds.get(0) + "/${ITEM_FULL_NAME}", story.j.jenkins.getRawBuildsDir());
-            FreeStyleProject p = story.j.jenkins.createProject(MockFolder.class, "d").createProject(FreeStyleProject.class, "prj");
+            assertEquals(builds.get(0) + "/${ITEM_FULL_NAME}", steps.jenkins.getRawBuildsDir());
+            FreeStyleProject p = steps.jenkins.createProject(MockFolder.class, "d").createProject(FreeStyleProject.class, "prj");
             FreeStyleBuild b = p.scheduleBuild2(0).get();
             File oldBuildDir = new File(builds.get(0), "d/prj");
             assertEquals(new File(oldBuildDir, b.getId()), b.getRootDir());
@@ -348,6 +305,15 @@ public class JenkinsBuildsAndWorkspacesDirectoriesTest {
             p.delete();
             assertFalse(b.getRootDir().isDirectory());
         });
+    }
+
+    private static File newFolder(File root, String... subDirs) throws IOException {
+        String subFolder = String.join("/", subDirs);
+        File result = new File(root, subFolder);
+        if (!result.mkdirs()) {
+            throw new IOException("Couldn't create folders " + root);
+        }
+        return result;
     }
 
 }

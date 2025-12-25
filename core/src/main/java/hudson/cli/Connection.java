@@ -21,21 +21,13 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+
 package hudson.cli;
 
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import hudson.remoting.ClassFilter;
 import hudson.remoting.ObjectInputStreamEx;
 import hudson.remoting.SocketChannelStream;
-import org.apache.commons.codec.binary.Base64;
-
-import javax.crypto.Cipher;
-import javax.crypto.CipherInputStream;
-import javax.crypto.CipherOutputStream;
-import javax.crypto.KeyAgreement;
-import javax.crypto.SecretKey;
-import javax.crypto.interfaces.DHPublicKey;
-import javax.crypto.spec.DHParameterSpec;
-import javax.crypto.spec.IvParameterSpec;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
@@ -55,6 +47,15 @@ import java.security.Signature;
 import java.security.interfaces.DSAPublicKey;
 import java.security.interfaces.RSAPublicKey;
 import java.security.spec.X509EncodedKeySpec;
+import java.util.Base64;
+import javax.crypto.Cipher;
+import javax.crypto.CipherInputStream;
+import javax.crypto.CipherOutputStream;
+import javax.crypto.KeyAgreement;
+import javax.crypto.SecretKey;
+import javax.crypto.interfaces.DHPublicKey;
+import javax.crypto.spec.DHParameterSpec;
+import javax.crypto.spec.IvParameterSpec;
 import org.jenkinsci.remoting.util.AnonymousClassWarnings;
 
 /**
@@ -69,7 +70,7 @@ public class Connection {
     public final DataOutputStream dout;
 
     public Connection(Socket socket) throws IOException {
-        this(SocketChannelStream.in(socket),SocketChannelStream.out(socket));
+        this(SocketChannelStream.in(socket), SocketChannelStream.out(socket));
     }
 
     public Connection(InputStream in, OutputStream out) {
@@ -113,18 +114,20 @@ public class Connection {
     /**
      * Receives an object sent by {@link #writeObject(Object)}
      */
+    // TODO JENKINS-60562 remove this class
+    @SuppressFBWarnings(value = "OBJECT_DESERIALIZATION", justification = "Not used. We should just remove it. Class is deprecated.")
     public <T> T readObject() throws IOException, ClassNotFoundException {
         ObjectInputStream ois = new ObjectInputStreamEx(in,
                 getClass().getClassLoader(), ClassFilter.DEFAULT);
-        return (T)ois.readObject();
+        return (T) ois.readObject();
     }
 
     public void writeKey(Key key) throws IOException {
-        writeUTF(new String(Base64.encodeBase64(key.getEncoded())));
+        writeUTF(Base64.getEncoder().encodeToString(key.getEncoded()));
     }
 
     public X509EncodedKeySpec readKey() throws IOException {
-        byte[] otherHalf = Base64.decodeBase64(readUTF()); // for historical reasons, we don't use readByteArray()
+        byte[] otherHalf = Base64.getDecoder().decode(readUTF()); // for historical reasons, we don't use readByteArray()
         return new X509EncodedKeySpec(otherHalf);
     }
 
@@ -151,8 +154,9 @@ public class Connection {
      * each other.
      */
     public KeyAgreement diffieHellman(boolean side) throws IOException, GeneralSecurityException {
-        return diffieHellman(side,512);
+        return diffieHellman(side, 512);
     }
+
     public KeyAgreement diffieHellman(boolean side, int keySize) throws IOException, GeneralSecurityException {
         KeyPair keyPair;
         PublicKey otherHalf;
@@ -194,14 +198,19 @@ public class Connection {
      */
     public Connection encryptConnection(SecretKey sessionKey, String algorithm) throws IOException, GeneralSecurityException {
         Cipher cout = Cipher.getInstance(algorithm);
-        cout.init(Cipher.ENCRYPT_MODE, sessionKey, new IvParameterSpec(sessionKey.getEncoded()));
+        cout.init(Cipher.ENCRYPT_MODE, sessionKey, createIv(sessionKey));
         CipherOutputStream o = new CipherOutputStream(out, cout);
 
         Cipher cin = Cipher.getInstance(algorithm);
-        cin.init(Cipher.DECRYPT_MODE, sessionKey, new IvParameterSpec(sessionKey.getEncoded()));
+        cin.init(Cipher.DECRYPT_MODE, sessionKey, createIv(sessionKey));
         CipherInputStream i = new CipherInputStream(in, cin);
 
-        return new Connection(i,o);
+        return new Connection(i, o);
+    }
+
+    @SuppressFBWarnings(value = "STATIC_IV", justification = "TODO needs triage")
+    private IvParameterSpec createIv(SecretKey sessionKey) {
+        return new IvParameterSpec(sessionKey.getEncoded());
     }
 
     /**
@@ -212,8 +221,8 @@ public class Connection {
      */
     public static byte[] fold(byte[] bytes, int size) {
         byte[] r = new byte[size];
-        for (int i=Math.max(bytes.length,size)-1; i>=0; i-- ) {
-            r[i%r.length] ^= bytes[i%bytes.length];
+        for (int i = Math.max(bytes.length, size) - 1; i >= 0; i--) {
+            r[i % r.length] ^= bytes[i % bytes.length];
         }
         return r;
     }
@@ -225,7 +234,7 @@ public class Connection {
     private String detectKeyAlgorithm(PublicKey kp) {
         if (kp instanceof RSAPublicKey)     return "RSA";
         if (kp instanceof DSAPublicKey)     return "DSA";
-        throw new IllegalArgumentException("Unknown public key type: "+kp);
+        throw new IllegalArgumentException("Unknown public key type: " + kp);
     }
 
     /**
@@ -237,7 +246,7 @@ public class Connection {
         writeUTF(algorithm);
         writeKey(key.getPublic());
 
-        Signature sig = Signature.getInstance("SHA1with"+algorithm);
+        Signature sig = Signature.getInstance("SHA1with" + algorithm);
         sig.initSign(key.getPrivate());
         sig.update(key.getPublic().getEncoded());
         sig.update(sharedSecret);
@@ -253,7 +262,7 @@ public class Connection {
             PublicKey spk = KeyFactory.getInstance(serverKeyAlgorithm).generatePublic(readKey());
 
             // verify the identity of the server
-            Signature sig = Signature.getInstance("SHA1with"+serverKeyAlgorithm);
+            Signature sig = Signature.getInstance("SHA1with" + serverKeyAlgorithm);
             sig.initVerify(spk);
             sig.update(spk.getEncoded());
             sig.update(sharedSecret);
@@ -261,7 +270,7 @@ public class Connection {
 
             return spk;
         } catch (ClassNotFoundException e) {
-            throw new Error(e); // impossible
+            throw new AssertionError(e); // impossible
         }
     }
 

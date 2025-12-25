@@ -24,39 +24,30 @@
 
 package hudson.model;
 
-import org.junit.Test;
-import static org.junit.Assert.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
-public class RunParameterValueTest {
-    
+import org.junit.jupiter.api.Test;
+
+class RunParameterValueTest {
+
     @SuppressWarnings("ResultOfObjectAllocationIgnored")
-    @Test public void robustness() throws Exception {
+    @Test
+    void robustness() {
         RunParameterValue rpv = new RunParameterValue("whatever", "folder/job#57");
         assertEquals("whatever", rpv.getName());
         assertEquals("folder/job", rpv.getJobName());
         assertEquals("57", rpv.getNumber());
-        try {
-            new RunParameterValue("whatever", null);
-            fail();
-        } catch (IllegalArgumentException x) {
-            // good
-        }
-        try {
-            new RunParameterValue("whatever", "invalid");
-            fail();
-        } catch (IllegalArgumentException x) {
-            // good
-        }
-        try {
-            new RunParameterValue("whatever", "invalid", "desc");
-            fail();
-        } catch (IllegalArgumentException x) {
-            // good
-        }
+
+        assertThrows(IllegalArgumentException.class, () -> new RunParameterValue("whatever", null));
+        assertThrows(IllegalArgumentException.class, () -> new RunParameterValue("whatever", "invalid"));
+        assertThrows(IllegalArgumentException.class, () -> new RunParameterValue("whatever", "invalid", "desc"));
+
         rpv = (RunParameterValue) Run.XSTREAM2.fromXML("<hudson.model.RunParameterValue><name>whatever</name><runId>bogus</runId></hudson.model.RunParameterValue>");
         assertEquals("whatever", rpv.getName());
-        assertEquals(null, rpv.getJobName());
-        assertEquals(null, rpv.getNumber());
+        assertNull(rpv.getJobName());
+        assertNull(rpv.getNumber());
    }
 
 }

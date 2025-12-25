@@ -1,16 +1,18 @@
 package jenkins.model;
 
-import org.junit.Test;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.is;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import static org.hamcrest.core.Is.is;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertThat;
-import static org.junit.Assert.assertTrue;
+import org.junit.jupiter.api.Test;
 
-public class IdStrategyTest {
+class IdStrategyTest {
 
+    @SuppressWarnings("deprecation")
     @Test
-    public void caseInsensitive() {
+    void caseInsensitive() {
         IdStrategy idStrategy = new IdStrategy.CaseInsensitive();
 
         assertRestrictedNames(idStrategy);
@@ -44,8 +46,9 @@ public class IdStrategyTest {
         assertThat(idStrategy.idFromFilename("rrr$t123"), is("rrr$t123"));
     }
 
+    @SuppressWarnings("deprecation")
     @Test
-    public void caseInsensitivePassesThroughOldLegacy() {
+    void caseInsensitivePassesThroughOldLegacy() {
         IdStrategy idStrategy = new IdStrategy.CaseInsensitive();
 
         assertThat(idStrategy.idFromFilename("make\u1000000"), is("make\u1000000"));
@@ -54,8 +57,9 @@ public class IdStrategyTest {
         assertThat(idStrategy.idFromFilename("~1fred"), is("~1fred"));
     }
 
+    @SuppressWarnings("deprecation")
     @Test
-    public void caseSensitive() {
+    void caseSensitive() {
         IdStrategy idStrategy = new IdStrategy.CaseSensitive();
 
         assertRestrictedNames(idStrategy);
@@ -92,8 +96,9 @@ public class IdStrategyTest {
         assertThat(idStrategy.idFromFilename("iiii _-@$007~ea"), is("iiii _-@$007Ea"));
     }
 
+    @SuppressWarnings("deprecation")
     @Test
-    public void caseSensitivePassesThroughOldLegacy() {
+    void caseSensitivePassesThroughOldLegacy() {
         IdStrategy idStrategy = new IdStrategy.CaseSensitive();
 
         assertThat(idStrategy.idFromFilename("make\u1000000"), is("make\u1000000"));
@@ -102,7 +107,7 @@ public class IdStrategyTest {
     }
 
     @Test
-    public void testEqualsCaseInsensitive() {
+    void testEqualsCaseInsensitive() {
         IdStrategy idStrategy = IdStrategy.CASE_INSENSITIVE;
         assertTrue(idStrategy.equals("user1", "User1"));
         assertTrue(idStrategy.equals("User1", "user1"));
@@ -112,7 +117,7 @@ public class IdStrategyTest {
     }
 
     @Test
-    public void testEqualsCaseSensitive() {
+    void testEqualsCaseSensitive() {
         IdStrategy idStrategy = new IdStrategy.CaseSensitive();
         assertFalse(idStrategy.equals("user1", "User1"));
         assertFalse(idStrategy.equals("User1", "user1"));
@@ -122,7 +127,7 @@ public class IdStrategyTest {
     }
 
     @Test
-    public void testEqualsCaseSensitiveEmailAddress() {
+    void testEqualsCaseSensitiveEmailAddress() {
         IdStrategy idStrategy = new IdStrategy.CaseSensitiveEmailAddress();
         assertFalse(idStrategy.equals("john.smith@acme.org", "John.Smith@acme.org"));
         assertFalse(idStrategy.equals("john.smith@acme.org", "John.Smith@ACME.org"));
@@ -137,7 +142,7 @@ public class IdStrategyTest {
     }
 
     @Test
-    public void testKeyForCaseInsensitive() {
+    void testKeyForCaseInsensitive() {
         IdStrategy idStrategy = IdStrategy.CASE_INSENSITIVE;
         assertThat(idStrategy.keyFor("user1"), is("user1"));
         assertThat(idStrategy.keyFor("User1"), is("user1"));
@@ -145,7 +150,7 @@ public class IdStrategyTest {
     }
 
     @Test
-    public void testKeyForCaseSensitive() {
+    void testKeyForCaseSensitive() {
         IdStrategy idStrategy = new IdStrategy.CaseSensitive();
         assertThat(idStrategy.keyFor("user1"), is("user1"));
         assertThat(idStrategy.keyFor("User1"), is("User1"));
@@ -153,7 +158,7 @@ public class IdStrategyTest {
     }
 
     @Test
-    public void testKeyForCaseSensitiveEmailAddress() {
+    void testKeyForCaseSensitiveEmailAddress() {
         IdStrategy idStrategy = new IdStrategy.CaseSensitiveEmailAddress();
         assertThat(idStrategy.keyFor("john.smith@acme.org"), is("john.smith@acme.org"));
         assertThat(idStrategy.keyFor("John.Smith@acme.org"), is("John.Smith@acme.org"));
@@ -166,43 +171,44 @@ public class IdStrategyTest {
     }
 
     @Test
-    public void testCompareCaseInsensitive() {
+    void testCompareCaseInsensitive() {
         IdStrategy idStrategy = IdStrategy.CASE_INSENSITIVE;
         assertTrue(idStrategy.compare("user1", "user2") < 0);
         assertTrue(idStrategy.compare("user2", "user1") > 0);
-        assertTrue(idStrategy.compare("user1", "user1") == 0);
+        assertEquals(0, idStrategy.compare("user1", "user1"));
         assertTrue(idStrategy.compare("USER1", "user2") < 0);
         assertTrue(idStrategy.compare("USER2", "user1") > 0);
-        assertTrue(idStrategy.compare("User1", "user1") == 0);
+        assertEquals(0, idStrategy.compare("User1", "user1"));
     }
 
     @Test
-    public void testCompareCaseSensitive() {
+    void testCompareCaseSensitive() {
         IdStrategy idStrategy = new IdStrategy.CaseSensitive();
         assertTrue(idStrategy.compare("user1", "user2") < 0);
         assertTrue(idStrategy.compare("user2", "user1") > 0);
-        assertTrue(idStrategy.compare("user1", "user1") == 0);
+        assertEquals(0, idStrategy.compare("user1", "user1"));
         assertTrue(idStrategy.compare("USER1", "user2") < 0);
         assertTrue(idStrategy.compare("USER2", "user1") < 0);
         assertTrue(idStrategy.compare("User1", "user1") < 0);
     }
 
     @Test
-    public void testCompareCaseSensitiveEmail() {
+    void testCompareCaseSensitiveEmail() {
         IdStrategy idStrategy = new IdStrategy.CaseSensitiveEmailAddress();
-        assertTrue(idStrategy.compare("john.smith@acme.org", "john.smith@acme.org") == 0);
-        assertTrue(idStrategy.compare("John.Smith@acme.org", "John.Smith@acme.org") == 0);
-        assertTrue(idStrategy.compare("John.Smith@ACME.org", "John.Smith@acme.org") == 0);
-        assertTrue(idStrategy.compare("John.Smith@acme.ORG", "John.Smith@acme.org") == 0);
-        assertTrue(idStrategy.compare("john.smith", "john.smith") == 0);
-        assertTrue(idStrategy.compare("John.Smith", "John.Smith") == 0);
-        assertTrue(idStrategy.compare("john@smith@acme.org", "john@smith@acme.org") == 0);
-        assertTrue(idStrategy.compare("John@Smith@acme.org", "John@Smith@acme.org") == 0);
+        assertEquals(0, idStrategy.compare("john.smith@acme.org", "john.smith@acme.org"));
+        assertEquals(0, idStrategy.compare("John.Smith@acme.org", "John.Smith@acme.org"));
+        assertEquals(0, idStrategy.compare("John.Smith@ACME.org", "John.Smith@acme.org"));
+        assertEquals(0, idStrategy.compare("John.Smith@acme.ORG", "John.Smith@acme.org"));
+        assertEquals(0, idStrategy.compare("john.smith", "john.smith"));
+        assertEquals(0, idStrategy.compare("John.Smith", "John.Smith"));
+        assertEquals(0, idStrategy.compare("john@smith@acme.org", "john@smith@acme.org"));
+        assertEquals(0, idStrategy.compare("John@Smith@acme.org", "John@Smith@acme.org"));
 
         assertTrue(idStrategy.compare("John.Smith@acme.org", "john.smith@acme.org") < 0);
         assertTrue(idStrategy.compare("john.smith@acme.org", "John.Smith@acme.org") > 0);
     }
 
+    @SuppressWarnings("deprecation")
     private void assertRestrictedNames(IdStrategy idStrategy) {
         assertThat(idStrategy.idFromFilename("$002f"), is("/"));
 
